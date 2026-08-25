@@ -190,11 +190,8 @@ func (b *Bucket) ParseACLOutputV2(aclOutput *s3.GetBucketAclOutput) error {
 	b.DenyAll()
 
 	for _, g := range aclOutput.Grants {
-		switch groupURIOf(g) {
-		case groups.AllUsersGroup:
-			b.grantAllUsers(g.Permission)
-		case groups.AuthUsersGroup:
-			b.grantAuthUsers(g.Permission)
+		if fields := b.groupPerms(groupURIOf(g)); fields != nil {
+			grant(fields, g.Permission)
 		}
 	}
 	return nil
@@ -209,36 +206,35 @@ func groupURIOf(g types.Grant) string {
 	return *g.Grantee.URI
 }
 
-// grantAllUsers marks the given permission as allowed for the AllUsers group.
-func (b *Bucket) grantAllUsers(p types.Permission) {
-	switch p {
-	case types.PermissionRead:
-		b.PermAllUsersRead = PermissionAllowed
-	case types.PermissionWrite:
-		b.PermAllUsersWrite = PermissionAllowed
-	case types.PermissionReadAcp:
-		b.PermAllUsersReadACL = PermissionAllowed
-	case types.PermissionWriteAcp:
-		b.PermAllUsersWriteACL = PermissionAllowed
-	case types.PermissionFullControl:
-		b.PermAllUsersFullControl = PermissionAllowed
+// groupPerms returns the READ/WRITE/READ_ACP/WRITE_ACP/FULL_CONTROL permission
+// fields for the given group URI, or nil if the URI is not a recognized group.
+func (b *Bucket) groupPerms(groupURI string) map[types.Permission]*uint8 {
+	switch groupURI {
+	case groups.AllUsersGroup:
+		return map[types.Permission]*uint8{
+			types.PermissionRead:        &b.PermAllUsersRead,
+			types.PermissionWrite:       &b.PermAllUsersWrite,
+			types.PermissionReadAcp:     &b.PermAllUsersReadACL,
+			types.PermissionWriteAcp:    &b.PermAllUsersWriteACL,
+			types.PermissionFullControl: &b.PermAllUsersFullControl,
+		}
+	case groups.AuthUsersGroup:
+		return map[types.Permission]*uint8{
+			types.PermissionRead:        &b.PermAuthUsersRead,
+			types.PermissionWrite:       &b.PermAuthUsersWrite,
+			types.PermissionReadAcp:     &b.PermAuthUsersReadACL,
+			types.PermissionWriteAcp:    &b.PermAuthUsersWriteACL,
+			types.PermissionFullControl: &b.PermAuthUsersFullControl,
+		}
+	default:
+		return nil
 	}
 }
 
-// grantAuthUsers marks the given permission as allowed for the
-// AuthenticatedUsers group.
-func (b *Bucket) grantAuthUsers(p types.Permission) {
-	switch p {
-	case types.PermissionRead:
-		b.PermAuthUsersRead = PermissionAllowed
-	case types.PermissionWrite:
-		b.PermAuthUsersWrite = PermissionAllowed
-	case types.PermissionReadAcp:
-		b.PermAuthUsersReadACL = PermissionAllowed
-	case types.PermissionWriteAcp:
-		b.PermAuthUsersWriteACL = PermissionAllowed
-	case types.PermissionFullControl:
-		b.PermAuthUsersFullControl = PermissionAllowed
+// grant marks the field corresponding to permission p as allowed, if present.
+func grant(fields map[types.Permission]*uint8, p types.Permission) {
+	if field, ok := fields[p]; ok {
+		*field = PermissionAllowed
 	}
 }
 
