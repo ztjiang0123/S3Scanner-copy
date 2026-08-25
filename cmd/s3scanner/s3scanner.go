@@ -226,7 +226,12 @@ func runLocal(p provider.StorageProvider, args ArgCollection) {
 
 	for i := 0; i < args.Threads; i++ {
 		wg.Add(1)
-		go worker.Work(&wg, buckets, p, args.DoEnumerate, args.WriteToDB, args.JSON)
+		go worker.Work(&wg, buckets, worker.ScanConfig{
+			Provider:    p,
+			DoEnumerate: args.DoEnumerate,
+			WriteToDB:   args.WriteToDB,
+			JSON:        args.JSON,
+		})
 	}
 
 	if args.BucketFile != "" {
@@ -263,7 +268,16 @@ func runMQ(p provider.StorageProvider, args ArgCollection) {
 
 	for i := 0; i < args.Threads; i++ {
 		wg.Add(1)
-		go worker.WorkMQ(i, &wg, conn, p, mqName, args.Threads, args.DoEnumerate, args.WriteToDB)
+		go worker.WorkMQ(i, &wg, worker.MQConfig{
+			ScanConfig: worker.ScanConfig{
+				Provider:    p,
+				DoEnumerate: args.DoEnumerate,
+				WriteToDB:   args.WriteToDB,
+			},
+			Conn:    conn,
+			Queue:   mqName,
+			Threads: args.Threads,
+		})
 	}
 	log.Printf("Waiting for messages. To exit press CTRL+C")
 	wg.Wait()
