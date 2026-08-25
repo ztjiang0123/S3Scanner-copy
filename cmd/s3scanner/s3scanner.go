@@ -133,13 +133,34 @@ func Run(version string) {
 		os.Exit(0)
 	}
 
-	argsErr := args.Validate()
-	if argsErr != nil {
+	if argsErr := args.Validate(); argsErr != nil {
 		log.Error(argsErr)
 		os.Exit(1)
 	}
 
-	// Configure logging
+	configureLogging(args)
+
+	if configErr := validateConfig(args); configErr != nil {
+		log.Error(configErr)
+		os.Exit(1)
+	}
+
+	p := buildProvider(args)
+
+	if args.WriteToDB {
+		connectDB()
+	}
+
+	if args.UseMq {
+		runMQ(p, args)
+		return
+	}
+	runLocal(p, args)
+	os.Exit(0)
+}
+
+// configureLogging sets up the global logger's level, output, and formatter.
+func configureLogging(args ArgCollection) {
 	log.SetLevel(log.InfoLevel)
 	if args.Verbose {
 		log.SetLevel(log.DebugLevel)
@@ -150,78 +171,88 @@ func Run(version string) {
 	} else {
 		log.SetFormatter(&log.TextFormatter{DisableTimestamp: true})
 	}
+}
 
-	var p provider.StorageProvider
-	var err error
-	configErr := validateConfig(args)
-	if configErr != nil {
-		log.Error(configErr)
-		os.Exit(1)
-	}
-	if args.ProviderFlag == "custom" {
-		if viper.IsSet("providers.custom") {
-			log.Debug("found custom provider")
-			p, err = provider.NewCustomProvider(
-				viper.GetString("providers.custom.address_style"),
-				viper.GetBool("providers.custom.insecure"),
-				viper.GetStringSlice("providers.custom.regions"),
-				viper.GetString("providers.custom.endpoint_format"))
-			if err != nil {
-				log.Error(err)
-				os.Exit(1)
-			}
-		}
-	} else {
+// buildProvider constructs the storage provider selected on the command line,
+// exiting the process on any construction error.
+func buildProvider(args ArgCollection) provider.StorageProvider {
+	var (
+		p   provider.StorageProvider
+		err error
+	)
+
+	if args.ProviderFlag != "custom" {
 		p, err = provider.NewProvider(args.ProviderFlag)
 		if err != nil {
 			log.Error(err)
 			os.Exit(1)
 		}
+		return p
 	}
 
-	// Setup database connection
-	if args.WriteToDB {
-		dbConfig := viper.GetString("db.uri")
-		log.Debugf("using database URI from config: %s", dbConfig)
-		dbErr := db.Connect(dbConfig, true)
-		if dbErr != nil {
-			log.Error(dbErr)
+	// The custom provider is only built when its config section is present;
+	// otherwise p is left nil, matching the original behavior.
+	if viper.IsSet("providers.custom") {
+		log.Debug("found custom provider")
+		p, err = provider.NewCustomProvider(
+			viper.GetString("providers.custom.address_style"),
+			viper.GetBool("providers.custom.insecure"),
+			viper.GetStringSlice("providers.custom.regions"),
+			viper.GetString("providers.custom.endpoint_format"))
+		if err != nil {
+			log.Error(err)
 			os.Exit(1)
 		}
 	}
+	return p
+}
 
+// connectDB opens the Postgres connection using the URI from config, exiting on
+// failure.
+func connectDB() {
+	dbConfig := viper.GetString("db.uri")
+	log.Debugf("using database URI from config: %s", dbConfig)
+	if dbErr := db.Connect(dbConfig, true); dbErr != nil {
+		log.Error(dbErr)
+		os.Exit(1)
+	}
+}
+
+// runLocal scans buckets sourced from a file or a single -bucket flag using a
+// pool of local workers.
+func runLocal(p provider.StorageProvider, args ArgCollection) {
 	var wg sync.WaitGroup
+	buckets := make(chan bucket.Bucket)
 
-	if !args.UseMq {
-		buckets := make(chan bucket.Bucket)
-
-		for i := 0; i < args.Threads; i++ {
-			wg.Add(1)
-			go worker.Work(&wg, buckets, p, args.DoEnumerate, args.WriteToDB, args.JSON)
-		}
-
-		if args.BucketFile != "" {
-			err := bucket.ReadFromFile(args.BucketFile, buckets)
-			close(buckets)
-			if err != nil {
-				log.Error(err)
-				os.Exit(1)
-			}
-		} else if args.BucketName != "" {
-			if !bucket.IsValidS3BucketName(args.BucketName) {
-				log.Info(fmt.Sprintf("invalid   | %s", args.BucketName))
-				os.Exit(0)
-			}
-			c := bucket.NewBucket(strings.ToLower(args.BucketName))
-			buckets <- c
-			close(buckets)
-		}
-
-		wg.Wait()
-		os.Exit(0)
+	for i := 0; i < args.Threads; i++ {
+		wg.Add(1)
+		go worker.Work(&wg, buckets, p, args.DoEnumerate, args.WriteToDB, args.JSON)
 	}
 
-	// Setup mq connection and spin off consumers
+	if args.BucketFile != "" {
+		err := bucket.ReadFromFile(args.BucketFile, buckets)
+		close(buckets)
+		if err != nil {
+			log.Error(err)
+			os.Exit(1)
+		}
+	} else if args.BucketName != "" {
+		if !bucket.IsValidS3BucketName(args.BucketName) {
+			log.Info(fmt.Sprintf("invalid   | %s", args.BucketName))
+			os.Exit(0)
+		}
+		c := bucket.NewBucket(strings.ToLower(args.BucketName))
+		buckets <- c
+		close(buckets)
+	}
+
+	wg.Wait()
+}
+
+// runMQ connects to RabbitMQ and spins off consumer workers that scan buckets
+// pulled from the queue.
+func runMQ(p provider.StorageProvider, args ArgCollection) {
+	var wg sync.WaitGroup
 	mqURI := viper.GetString("mq.uri")
 	mqName := viper.GetString("mq.queue_name")
 	conn, err := amqp.Dial(mqURI)
