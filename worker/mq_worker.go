@@ -19,26 +19,35 @@ func FailOnError(err error, msg string) {
 	}
 }
 
-func WorkMQ(threadID int, wg *sync.WaitGroup, conn *amqp.Connection, provider provider.StorageProvider, queue string,
-	threads int, doEnumerate bool, writeToDB bool) {
+// MQConfig groups the settings a message-queue worker needs. It embeds the
+// shared ScanConfig so the scan-related fields (provider, enumerate, write-to-DB)
+// are reused rather than restated.
+type MQConfig struct {
+	ScanConfig
+	Conn    *amqp.Connection
+	Queue   string
+	Threads int
+}
+
+func WorkMQ(threadID int, wg *sync.WaitGroup, cfg MQConfig) {
 	_, once := os.LookupEnv("TEST_MQ") // If we're being tested, exit after one bucket is scanned
 	defer wg.Done()
 
 	// Wrap the whole thing in a for (while) loop so if the mq server kills the channel, we start it up again
 	for {
-		ch, chErr := mq.Connect(conn, queue, threads, threadID)
+		ch, chErr := mq.Connect(cfg.Conn, cfg.Queue, cfg.Threads, threadID)
 		if chErr != nil {
 			FailOnError(chErr, "couldn't connect to message queue")
 		}
 
-		msgs, consumeErr := ch.Consume(queue, fmt.Sprintf("%s_%v", queue, threadID), false, false, false, false, nil)
+		msgs, consumeErr := ch.Consume(cfg.Queue, fmt.Sprintf("%s_%v", cfg.Queue, threadID), false, false, false, false, nil)
 		if consumeErr != nil {
 			log.Error(fmt.Errorf("failed to register a consumer: %w", consumeErr))
 			return
 		}
 
 		for j := range msgs {
-			outcome := processMessage(j, provider, doEnumerate, writeToDB)
+			outcome := processMessage(j, cfg.Provider, cfg.DoEnumerate, cfg.WriteToDB)
 			if outcome == msgChannelClosed {
 				// The server likely closed the channel; break to the top of the
 				// outer for-loop to re-establish a new one.

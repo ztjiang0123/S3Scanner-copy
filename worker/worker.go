@@ -28,39 +28,47 @@ func PrintResult(b *bucket.Bucket, json bool) {
 	log.Info(result)
 }
 
-func Work(wg *sync.WaitGroup, buckets chan bucket.Bucket, provider provider.StorageProvider, doEnumerate bool,
-	writeToDB bool, json bool) {
+// ScanConfig groups the scan settings shared by every worker so they can be
+// passed around as a single value instead of a long parameter list.
+type ScanConfig struct {
+	Provider    provider.StorageProvider
+	DoEnumerate bool
+	WriteToDB   bool
+	JSON        bool
+}
+
+func Work(wg *sync.WaitGroup, buckets chan bucket.Bucket, cfg ScanConfig) {
 	defer wg.Done()
 	for b1 := range buckets {
-		b, existsErr := provider.BucketExists(&b1)
+		b, existsErr := cfg.Provider.BucketExists(&b1)
 		if existsErr != nil {
 			log.Errorf("error     | %s | %s", b.Name, existsErr.Error())
 			continue
 		}
 
 		if b.Exists == bucket.BucketNotExist {
-			PrintResult(b, json)
+			PrintResult(b, cfg.JSON)
 			continue
 		}
 
 		// Scan permissions
-		scanErr := provider.Scan(b, false)
+		scanErr := cfg.Provider.Scan(b, false)
 		if scanErr != nil {
 			log.WithFields(log.Fields{"bucket": b}).Error(scanErr)
 		}
 
-		if doEnumerate && b.PermAllUsersRead == bucket.PermissionAllowed {
+		if cfg.DoEnumerate && b.PermAllUsersRead == bucket.PermissionAllowed {
 			log.WithFields(log.Fields{"method": "main.work()",
 				"bucket_name": b.Name, "region": b.Region}).Debugf("enumerating objects...")
-			enumErr := provider.Enumerate(b)
+			enumErr := cfg.Provider.Enumerate(b)
 			if enumErr != nil {
 				log.Errorf("Error enumerating bucket '%s': %v\nEnumerated objects: %v", b.Name, enumErr, len(b.Objects))
 				continue
 			}
 		}
-		PrintResult(b, json)
+		PrintResult(b, cfg.JSON)
 
-		if writeToDB {
+		if cfg.WriteToDB {
 			dbErr := db.StoreBucket(b)
 			if dbErr != nil {
 				log.Error(dbErr)
