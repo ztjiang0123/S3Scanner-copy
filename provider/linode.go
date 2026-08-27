@@ -15,13 +15,7 @@ type Linode struct {
 
 func NewProviderLinode() (*Linode, error) {
 	pl := new(Linode)
-
-	clients, err := pl.newClients()
-	if err != nil {
-		return pl, err
-	}
-	pl.clients = clients
-	return pl, nil
+	return initClients(pl, pl.newClients, func(c *clientmap.ClientMap) { pl.clients = c })
 }
 
 func (pl *Linode) getRegionClient(region string) *s3.Client {
