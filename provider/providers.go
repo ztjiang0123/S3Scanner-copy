@@ -83,6 +83,19 @@ func NewProvider(name string) (StorageProvider, error) {
 	return provider, err
 }
 
+// initClients populates a provider's client map by calling its newClients
+// method and assigning the result via setClients. On error it leaves the
+// provider untouched and returns the error alongside the (partial) provider so
+// callers can surface it directly.
+func initClients[T any](p *T, newClients func() (*clientmap.ClientMap, error), setClients func(*clientmap.ClientMap)) (*T, error) {
+	clients, err := newClients()
+	if err != nil {
+		return p, err
+	}
+	setClients(clients)
+	return p, nil
+}
+
 func newNonAWSClient(sp StorageProvider, regionURL string) (*s3.Client, error) {
 	var httpClient s3.HTTPClient
 

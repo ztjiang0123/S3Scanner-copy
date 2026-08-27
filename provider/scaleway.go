@@ -13,13 +13,7 @@ type Scaleway struct {
 
 func NewProviderScaleway() (*Scaleway, error) {
 	sc := new(Scaleway)
-
-	clients, err := sc.newClients()
-	if err != nil {
-		return sc, err
-	}
-	sc.clients = clients
-	return sc, nil
+	return initClients(sc, sc.newClients, func(c *clientmap.ClientMap) { sc.clients = c })
 }
 
 func (sc *Scaleway) newClients() (*clientmap.ClientMap, error) {

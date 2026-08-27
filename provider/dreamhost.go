@@ -89,11 +89,5 @@ func (p *Dreamhost) newClients() (*clientmap.ClientMap, error) {
 
 func NewProviderDreamhost() (*Dreamhost, error) {
 	pd := new(Dreamhost)
-
-	clients, err := pd.newClients()
-	if err != nil {
-		return pd, err
-	}
-	pd.clients = clients
-	return pd, nil
+	return initClients(pd, pd.newClients, func(c *clientmap.ClientMap) { pd.clients = c })
 }

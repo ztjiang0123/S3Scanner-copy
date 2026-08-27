@@ -78,11 +78,5 @@ func (pdo *DigitalOcean) getRegionClient(region string) *s3.Client {
 
 func NewDigitalOcean() (*DigitalOcean, error) {
 	pdo := new(DigitalOcean)
-
-	clients, err := pdo.newClients()
-	if err != nil {
-		return pdo, err
-	}
-	pdo.clients = clients
-	return pdo, nil
+	return initClients(pdo, pdo.newClients, func(c *clientmap.ClientMap) { pdo.clients = c })
 }
